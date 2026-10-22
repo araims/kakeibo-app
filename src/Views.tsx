@@ -1,6 +1,6 @@
-import React from 'react';
-import { Trash2, Download } from 'lucide-react';
-import { Expense } from './types';
+//import React from 'react';
+//import { Trash2, Download } from 'lucide-react';
+import type{ Expense } from './types';
 
 // 集計画面
 export function SummaryView({ data, year, month }: { data: any, year: number, month: number }) {

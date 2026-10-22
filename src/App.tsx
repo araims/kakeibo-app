@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { PlusCircle, BarChart3, List, Settings, ChevronLeft, ChevronRight, Download, Edit2, Trash2, Plus, X } from 'lucide-react';
+//import { PlusCircle, BarChart3, List, Settings, ChevronLeft, ChevronRight, Download, Edit2, Trash2, Plus, X } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
