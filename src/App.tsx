@@ -7,20 +7,19 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 interface Expense { id: string; date: string; category: string; amount: number; payer: 'AO' | 'MASA'; memo: string; }
+interface CategoryItem { id: string; name: string; }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'input' | 'summary' | 'list' | 'settings'>('input');
   
-  // 💡年月の初期値を「現在の年月（2026年8月）」に変更し、制限なく動かせるように修正
   const [year, setYear] = useState(2026);
   const [month, setMonth] = useState(8);
   
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [ratioAO, setRatioAO] = useState<number>(50);
 
-  // 💡入力される日付の初期値も選択された年月に連動するように調整
-  const [date, setDate] = useState('2026-08-22');
+  const [date, setDate] = useState('2026-08-01');
   const [category, setCategory] = useState('');
   const [amount, setAmount] = useState('');
   const [payer, setPayer] = useState<'AO' | 'MASA' | null>(null);
@@ -28,7 +27,6 @@ export default function App() {
   const [newCategory, setNewCategory] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  // ページ切り替え時に、入力日付の年月の初期値を選択月に合わせる
   useEffect(() => {
     if (!editingId) {
       setDate(`${year}-${String(month).padStart(2, '0')}-01`);
@@ -39,12 +37,15 @@ export default function App() {
     try {
       const { data: expData } = await supabase.from('expenses').select('*').order('date', { ascending: false });
       if (expData) setExpenses(expData);
-      const { data: catData } = await supabase.from('categories').select('name').order('id');
+      
+      const { data: catData } = await supabase.from('categories').select('*').order('id');
       if (catData) {
-        const catNames = catData.map(c => c.name);
-        setCategories(catNames);
-        if (catNames.length > 0 && !category) setCategory(catNames[0]);
+        setCategories(catData);
+        if (catData.length > 0 && (!category || !catData.some(c => c.name === category))) {
+          setCategory(catData[0].name);
+        }
       }
+      
       const { data: ratData } = await supabase.from('ratios').select('ratio_ao').eq('id', 'current').single();
       if (ratData) setRatioAO(ratData.ratio_ao);
     } catch (e) { console.error(e); }
@@ -78,9 +79,23 @@ export default function App() {
   };
 
   const handleAddCategory = async () => {
-    if (!newCategory.trim() || categories.includes(newCategory.trim())) return;
-    await supabase.from('categories').insert([{ id: Date.now().toString(), name: newCategory.trim() }]);
+    const trimmed = newCategory.trim();
+    if (!trimmed || categories.some(c => c.name === trimmed)) return;
+    await supabase.from('categories').insert([{ id: Date.now().toString(), name: trimmed }]);
     setNewCategory(''); fetchData();
+  };
+
+  // 💡 追加：カテゴリー削除機能
+  const handleDeleteCategory = async (catId: string, catName: string) => {
+    if (!confirm(`カテゴリー「${catName}」を削除してもよろしいですか？`)) return;
+    try {
+      const { error } = await supabase.from('categories').delete().eq('id', catId);
+      if (error) throw error;
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert('カテゴリーの削除に失敗しました。');
+    }
   };
 
   const handleRatioChange = async (val: number) => {
@@ -92,6 +107,14 @@ export default function App() {
     setEditingId(item.id); setDate(item.date); setCategory(item.category);
     setAmount(item.amount.toString()); setPayer(item.payer); setMemo(item.memo); setActiveTab('input');
   };
+
+  // 💡 追加：選択された年月のカテゴリ別集計ロジック
+  const categoryTotals = useMemo(() => {
+    return filtered.reduce((acc, item) => {
+      acc[item.category] = (acc[item.category] || 0) + item.amount;
+      return acc;
+    }, {} as Record<string, number>);
+  }, [filtered]);
 
   const summary = useMemo(() => {
     const total = filtered.reduce((sum, item) => sum + item.amount, 0);
@@ -114,14 +137,13 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 flex justify-center items-start pt-4 px-4 font-sans text-slate-600">
       <div className="w-full max-w-md bg-white rounded-3xl shadow-sm border border-slate-100 flex flex-col min-h-[600px] overflow-hidden">
         
-        {/* ヘッダー：月移動のバグを修正 */}
+        {/* ヘッダー */}
         <header className="pt-6 pb-4 border-b border-slate-100 text-center bg-sky-50/40">
           <h1 className="text-xl font-bold text-sky-800 tracking-wide">AO & MASA 会計</h1>
           <div className="flex justify-center items-center gap-6 mt-3">
-            <button type="button" onClick={() => { if (month === 1) { setYear(year - 1); setMonth(12); } else { setMonth(month - 1); } }} className="p-1 text-sky-600 hover:text-sky-800 active:scale-90 transition">◀</button>
+            <button type="button" onClick={() => { if (month === 1) { setYear(year - 1); setMonth(12); } else { setMonth(month - 1); } }} className="p-1 text-sky-600 hover:text-sky-800 active:scale-90 transition"><ChevronLeft size={20} /></button>
             <span className="text-base font-bold text-slate-500">{year}年{month}月</span>
-            {/* 💡ここにあった10月以上の進行制限を撤廃し、未来の月へも無限に進めるように修正しました */}
-            <button type="button" onClick={() => { if (month === 12) { setYear(year + 1); setMonth(1); } else { setMonth(month + 1); } }} className="p-1 text-sky-600 hover:text-sky-800 active:scale-90 transition">▶</button>
+            <button type="button" onClick={() => { if (month === 12) { setYear(year + 1); setMonth(1); } else { setMonth(month + 1); } }} className="p-1 text-sky-600 hover:text-sky-800 active:scale-90 transition"><ChevronRight size={20} /></button>
           </div>
         </header>
 
@@ -131,7 +153,8 @@ export default function App() {
           <button type="button" onClick={() => setActiveTab('list')} className={`w-full py-3 flex flex-col items-center gap-1 transition ${activeTab === 'list' ? 'text-sky-700 bg-sky-50/50' : 'text-slate-400'}`}><List size={16} />明細</button>
           <button type="button" onClick={() => setActiveTab('settings')} className={`w-full py-3 flex flex-col items-center gap-1 transition ${activeTab === 'settings' ? 'text-sky-700 bg-sky-50/50' : 'text-slate-400'}`}><Settings size={16} />設定</button>
         </nav>
-        <div className="flex-1 p-6 bg-white">
+        <div className="flex-1 p-6 bg-white overflow-y-auto">
+          
           {/* 【1】入力・編集画面 */}
           {activeTab === 'input' && (
             <form onSubmit={handleSave} className="space-y-4">
@@ -145,7 +168,7 @@ export default function App() {
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-bold text-slate-400">カテゴリー</label>
                 <select value={category} onChange={(e) => setCategory(e.target.value)} className="p-3 rounded-xl border border-slate-200 bg-slate-50/50 text-slate-700 font-medium focus:outline-none">
-                  {categories.length === 0 ? <option value="">読込中...</option> : categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  {categories.length === 0 ? <option value="">読込中...</option> : categories.map(cat => <option key={cat.id} value={cat.name}>{cat.name}</option>)}
                 </select>
               </div>
               <div className="flex flex-col gap-1"><label className="text-xs font-bold text-slate-400">金額</label><div className="relative"><input type="text" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ''))} className="w-full p-3 text-right font-bold rounded-xl border border-slate-200 bg-slate-50/50 text-slate-700 pr-12 text-lg focus:outline-none" /><span className="absolute inset-y-0 right-4 flex items-center text-slate-400 font-bold">円</span></div></div>
@@ -163,7 +186,7 @@ export default function App() {
             </form>
           )}
 
-          {/* 【2】集計画面 */}
+          {/* 【2】集計画面：カテゴリ別集計値を追加 */}
           {activeTab === 'summary' && (
             <div className="space-y-5">
               <div className="bg-slate-50 rounded-2xl p-5 text-center border border-slate-100">
@@ -175,6 +198,23 @@ export default function App() {
                 <div className="flex justify-between items-center px-1"><span className="font-medium text-slate-400">AO 支払額:</span><span className="font-bold text-pink-600">￥{summary.ao.toLocaleString()}</span></div>
                 <div className="flex justify-between items-center px-1"><span className="font-medium text-slate-400">MASA 支払額:</span><span className="font-bold text-sky-600">￥{summary.m.toLocaleString()}</span></div>
                 <div className="border-t border-dashed border-slate-200 pt-3 mt-1 text-center text-xs font-bold text-amber-800 bg-amber-50/40 rounded-xl py-2 px-2 border border-amber-100/40">{summary.msg}</div>
+              </div>
+
+              {/* 💡 追加：下部にカテゴリ毎の集計値を表示 */}
+              <div className="bg-white border border-slate-100 rounded-2xl p-4 space-y-3 shadow-xs">
+                <h4 className="text-sm font-bold text-slate-500">カテゴリー別内訳</h4>
+                {Object.keys(categoryTotals).length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-4">今月のデータはありません</p>
+                ) : (
+                  <ul className="divide-y divide-slate-100 text-sm">
+                    {Object.entries(categoryTotals).map(([catName, catTotal]) => (
+                      <li key={catName} className="py-2 flex justify-between items-center">
+                        <span className="font-medium text-slate-600">{catName}</span>
+                        <span className="font-bold text-slate-700">￥{catTotal.toLocaleString()}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
           )}
@@ -206,7 +246,7 @@ export default function App() {
             </div>
           )}
 
-          {/* 【4】設定画面 */}
+          {/* 【4】設定画面：カテゴリー削除機能を追加 */}
           {activeTab === 'settings' && (
             <div className="space-y-5">
               <div className="bg-slate-50/40 border border-slate-200 rounded-2xl p-4 space-y-3 shadow-xs">
@@ -216,13 +256,27 @@ export default function App() {
               </div>
 
               <div className="bg-slate-50/40 border border-slate-200 rounded-2xl p-4 space-y-3 shadow-xs">
-                <h4 className="text-sm font-bold text-slate-500">カテゴリーのクラウド追加</h4>
+                <h4 className="text-sm font-bold text-slate-500">カテゴリーのクラウド追加・削除</h4>
                 <div className="flex gap-2">
                   <input type="text" placeholder="例: 交際費" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="flex-1 p-2 rounded-lg border border-slate-200 bg-white text-xs text-slate-600 focus:outline-none" />
                   <button type="button" onClick={handleAddCategory} className="px-3 bg-slate-50 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold flex items-center gap-1 transition-all"><Plus size={12} />追加</button>
                 </div>
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {categories.map(cat => <span key={cat} className="text-xxs bg-white text-slate-400 border border-slate-200 px-2 py-0.5 rounded-md font-medium">{cat}</span>)}
+                
+                {/* 💡 追加：各カテゴリーに削除ボタンを付与 */}
+                <div className="space-y-1.5 pt-1">
+                  {categories.map(cat => (
+                    <div key={cat.id} className="flex justify-between items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-xs">
+                      <span className="font-medium text-slate-600">{cat.name}</span>
+                      <button 
+                        type="button" 
+                        onClick={() => handleDeleteCategory(cat.id, cat.name)}
+                        className="text-slate-300 hover:text-rose-500 p-1 transition-colors"
+                        title="削除"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -232,11 +286,9 @@ export default function App() {
               </div>
             </div>
           )}
+
         </div>
       </div>
     </div>
   );
 }
-
-
-
