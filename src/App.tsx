@@ -12,14 +12,26 @@ interface CategoryItem { id: string; name: string; }
 export default function App() {
   const [activeTab, setActiveTab] = useState<'input' | 'summary' | 'list' | 'settings'>('input');
   
-  const [year, setYear] = useState(2026);
-  const [month, setMonth] = useState(8);
+//  const [year, setYear] = useState(2026);
+//  const [month, setMonth] = useState(8);
   
+// 本日の年・月を初期値として動的に取得
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [month, setMonth] = useState(() => new Date().getMonth() + 1);
+
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [ratioAO, setRatioAO] = useState<number>(50);
 
-  const [date, setDate] = useState('2026-08-01');
+  // 本日の日付をデフォルトでセット
+  const [date, setDate] = useState(() => {
+    const today = new Date();
+    const y = today.getFullYear();
+    const m = String(today.getMonth() + 1).padStart(2, '0');
+    const d = String(today.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  });
+
   const [category, setCategory] = useState('');
   const [amount, setAmount] = useState('');
   const [payer, setPayer] = useState<'AO' | 'MASA' | null>(null);
@@ -27,11 +39,11 @@ export default function App() {
   const [newCategory, setNewCategory] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!editingId) {
-      setDate(`${year}-${String(month).padStart(2, '0')}-01`);
-    }
-  }, [year, month, editingId]);
+//  useEffect(() => {
+//    if (!editingId) {
+//      setDate(`${year}-${String(month).padStart(2, '0')}-01`);
+//    }
+//  }, [year, month, editingId]);
 
   const fetchData = async () => {
     try {
@@ -85,7 +97,6 @@ export default function App() {
     setNewCategory(''); fetchData();
   };
 
-  // 💡 追加：カテゴリー削除機能
   const handleDeleteCategory = async (catId: string, catName: string) => {
     if (!confirm(`カテゴリー「${catName}」を削除してもよろしいですか？`)) return;
     try {
@@ -108,7 +119,6 @@ export default function App() {
     setAmount(item.amount.toString()); setPayer(item.payer); setMemo(item.memo); setActiveTab('input');
   };
 
-  // 💡 追加：選択された年月のカテゴリ別集計ロジック
   const categoryTotals = useMemo(() => {
     return filtered.reduce((acc, item) => {
       acc[item.category] = (acc[item.category] || 0) + item.amount;
@@ -139,7 +149,7 @@ export default function App() {
         
         {/* ヘッダー */}
         <header className="pt-6 pb-4 border-b border-slate-100 text-center bg-sky-50/40">
-          <h1 className="text-xl font-bold text-sky-800 tracking-wide">AO & MASA 会計</h1>
+          <h1 className="text-xl font-bold text-sky-800 tracking-wide">AO & Masa 会計</h1>
           <div className="flex justify-center items-center gap-6 mt-3">
             <button type="button" onClick={() => { if (month === 1) { setYear(year - 1); setMonth(12); } else { setMonth(month - 1); } }} className="p-1 text-sky-600 hover:text-sky-800 active:scale-90 transition"><ChevronLeft size={20} /></button>
             <span className="text-base font-bold text-slate-500">{year}年{month}月</span>
@@ -186,7 +196,7 @@ export default function App() {
             </form>
           )}
 
-          {/* 【2】集計画面：カテゴリ別集計値を追加 */}
+          {/* 【2】集計画面 */}
           {activeTab === 'summary' && (
             <div className="space-y-5">
               <div className="bg-slate-50 rounded-2xl p-5 text-center border border-slate-100">
@@ -200,7 +210,7 @@ export default function App() {
                 <div className="border-t border-dashed border-slate-200 pt-3 mt-1 text-center text-xs font-bold text-amber-800 bg-amber-50/40 rounded-xl py-2 px-2 border border-amber-100/40">{summary.msg}</div>
               </div>
 
-              {/* 💡 追加：下部にカテゴリ毎の集計値を表示 */}
+              {/* カテゴリー別内訳 */}
               <div className="bg-white border border-slate-100 rounded-2xl p-4 space-y-3 shadow-xs">
                 <h4 className="text-sm font-bold text-slate-500">カテゴリー別内訳</h4>
                 {Object.keys(categoryTotals).length === 0 ? (
@@ -246,7 +256,7 @@ export default function App() {
             </div>
           )}
 
-          {/* 【4】設定画面：カテゴリー削除機能を追加 */}
+          {/* 【4】設定画面 */}
           {activeTab === 'settings' && (
             <div className="space-y-5">
               <div className="bg-slate-50/40 border border-slate-200 rounded-2xl p-4 space-y-3 shadow-xs">
@@ -262,7 +272,6 @@ export default function App() {
                   <button type="button" onClick={handleAddCategory} className="px-3 bg-slate-50 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold flex items-center gap-1 transition-all"><Plus size={12} />追加</button>
                 </div>
                 
-                {/* 💡 追加：各カテゴリーに削除ボタンを付与 */}
                 <div className="space-y-1.5 pt-1">
                   {categories.map(cat => (
                     <div key={cat.id} className="flex justify-between items-center bg-white border border-slate-200 px-3 py-1.5 rounded-lg text-xs">
