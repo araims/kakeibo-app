@@ -3,11 +3,10 @@ import {
   PlusCircle, BarChart3, List, Settings, ChevronLeft, ChevronRight, 
   Trash2, Plus, X, Plane, Wallet, Edit2, Check 
 } from 'lucide-react';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { 
+  collection, getDocs, doc, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, getDoc 
+} from 'firebase/firestore';
+import { db } from './services/firebase';
 
 interface Expense { id: string; date: string; category: string; amount: number; payer: 'AO' | 'MASA'; memo: string; }
 interface CategoryItem { id: string; name: string; }
@@ -76,39 +75,58 @@ export default function App() {
   const [editingCurrencyCode, setEditingCurrencyCode] = useState<string | null>(null);
   const [editingRateValue, setEditingRateValue] = useState('');
 
-  // --- データ取得 ---
+  // --- Firestore からのデータ取得 ---
   const fetchData = async () => {
     try {
-      const { data: expData } = await supabase.from('expenses').select('*').order('date', { ascending: false });
-      if (expData) setExpenses(expData);
+      // 日常支出
+      const expSnap = await getDocs(query(collection(db, 'expenses'), orderBy('date', 'desc')));
+      const expList = expSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
+      setExpenses(expList);
 
-      const { data: catData } = await supabase.from('categories').select('*').order('id');
-      if (catData) {
-        setCategories(catData);
-        if (catData.length > 0 && !category) setCategory(catData[0].name);
+      // カテゴリー
+      const catSnap = await getDocs(query(collection(db, 'categories'), orderBy('id')));
+      const catList = catSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as CategoryItem));
+      setCategories(catList);
+      if (catList.length > 0 && !category) setCategory(catList[0].name);
+
+      // 比率 (ratios/current)
+      const ratioDoc = await getDoc(doc(db, 'ratios', 'current'));
+      if (ratioDoc.exists()) {
+        setRatioAO(ratioDoc.data().ratio_ao ?? 50);
       }
 
-      const { data: ratData } = await supabase.from('ratios').select('ratio_ao').eq('id', 'current').single();
-      if (ratData) setRatioAO(ratData.ratio_ao);
-
-      const { data: tripData } = await supabase.from('trips').select('*').order('start_date', { ascending: false });
-      if (tripData && tripData.length > 0) {
-        setTrips(tripData);
-        if (!selectedTripId) setSelectedTripId(tripData[0].id);
+      // 旅行一覧
+      const tripSnap = await getDocs(query(collection(db, 'trips'), orderBy('start_date', 'desc')));
+      const tripList = tripSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Trip));
+      if (tripList.length > 0) {
+        setTrips(tripList);
+        if (!selectedTripId) setSelectedTripId(tripList[0].id);
       }
 
-      const { data: tripCatData } = await supabase.from('trip_categories').select('*').order('id');
-      if (tripCatData) {
-        setTripCategories(tripCatData);
-        if (tripCatData.length > 0 && !tripCategory) setTripCategory(tripCatData[0].name);
+      // 旅行カテゴリー
+      const tripCatSnap = await getDocs(query(collection(db, 'trip_categories'), orderBy('id')));
+      const tripCatList = tripCatSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as CategoryItem));
+      if (tripCatList.length > 0) {
+        setTripCategories(tripCatList);
+        if (!tripCategory) setTripCategory(tripCatList[0].name);
       }
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error('データ取得エラー:', e); }
   };
 
   const fetchTripExpenses = async (tripId: string) => {
     if (!tripId) return;
-    const { data } = await supabase.from('trip_expenses').select('*').eq('trip_id', tripId).order('date', { ascending: false });
-    if (data) setTripExpenses(data);
+    try {
+      const q = query(collection(db, 'trip_expenses'));
+      const snap = await getDocs(q);
+      const list = snap.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as TripExpense))
+        .filter(item => item.trip_id === tripId);
+      // 日付順ソート
+      list.sort((a, b) => b.date.localeCompare(a.date));
+      setTripExpenses(list);
+    } catch (e) {
+      console.error('旅行明細取得エラー:', e);
+    }
   };
 
   useEffect(() => { fetchData(); }, []);
@@ -122,13 +140,18 @@ export default function App() {
     e.preventDefault();
     if (!amount || Number(amount) <= 0 || !payer || !category) return;
     const expenseData = { date, category, amount: Number(amount), payer: payer!, memo };
-    if (editingId) {
-      await supabase.from('expenses').update(expenseData).eq('id', editingId);
-      setEditingId(null);
-    } else {
-      await supabase.from('expenses').insert([{ id: Date.now().toString(), ...expenseData }]);
+    try {
+      if (editingId) {
+        await updateDoc(doc(db, 'expenses', editingId), expenseData);
+        setEditingId(null);
+      } else {
+        const newId = Date.now().toString();
+        await setDoc(doc(db, 'expenses', newId), expenseData);
+      }
+      setAmount(''); setMemo(''); fetchData();
+    } catch (err) {
+      console.error('保存エラー:', err);
     }
-    setAmount(''); setMemo(''); fetchData();
   };
 
   // --- 【旅】ハンドラー ---
@@ -136,18 +159,22 @@ export default function App() {
     if (!newTripTitle.trim()) return;
     const newId = Date.now().toString();
     const startDate = newTripDate || new Date().toISOString().split('T')[0];
-    const { error } = await supabase.from('trips').insert([{ id: newId, title: newTripTitle.trim(), start_date: startDate }]);
-    if (error) { alert('旅行の作成に失敗しました'); return; }
-    setNewTripTitle(''); setNewTripDate('');
-    await fetchData();
-    setSelectedTripId(newId);
+    try {
+      await setDoc(doc(db, 'trips', newId), { title: newTripTitle.trim(), start_date: startDate });
+      setNewTripTitle(''); setNewTripDate('');
+      await fetchData();
+      setSelectedTripId(newId);
+    } catch (err) {
+      alert('旅行の作成に失敗しました');
+      console.error(err);
+    }
   };
 
   const handleSaveTripExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTripId || !tripAmount || Number(tripAmount) <= 0 || !tripPayer || !tripCategory) return;
+    const newId = Date.now().toString();
     const expenseData = {
-      id: Date.now().toString(),
       trip_id: selectedTripId,
       date: tripDate,
       category: tripCategory,
@@ -156,38 +183,59 @@ export default function App() {
       payer: tripPayer!,
       memo: tripMemo
     };
-    await supabase.from('trip_expenses').insert([expenseData]);
-    setTripAmount(''); setTripMemo('');
-    fetchTripExpenses(selectedTripId);
-    setActiveTabTrip('summary');
+    try {
+      await setDoc(doc(db, 'trip_expenses', newId), expenseData);
+      setTripAmount(''); setTripMemo('');
+      fetchTripExpenses(selectedTripId);
+      setActiveTabTrip('summary');
+    } catch (err) {
+      console.error('旅行支出保存エラー:', err);
+    }
   };
 
   const handleDeleteTripExpense = async (id: string) => {
     if (confirm('この旅の明細を削除しますか？')) {
-      await supabase.from('trip_expenses').delete().eq('id', id);
-      fetchTripExpenses(selectedTripId);
+      try {
+        await deleteDoc(doc(db, 'trip_expenses', id));
+        fetchTripExpenses(selectedTripId);
+      } catch (err) {
+        console.error('削除エラー:', err);
+      }
     }
   };
 
   const handleAddTripCategory = async () => {
     const trimmed = newTripCategory.trim();
     if (!trimmed || tripCategories.some(c => c.name === trimmed)) return;
-    await supabase.from('trip_categories').insert([{ id: Date.now().toString(), name: trimmed }]);
-    setNewTripCategory(''); fetchData();
+    const newId = Date.now().toString();
+    try {
+      await setDoc(doc(db, 'trip_categories', newId), { name: trimmed });
+      setNewTripCategory(''); fetchData();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleUpdateTripCategory = async (id: string) => {
     const trimmed = editingTripCategoryName.trim();
     if (!trimmed) return;
-    await supabase.from('trip_categories').update({ name: trimmed }).eq('id', id);
-    setEditingTripCategoryId(null);
-    fetchData();
+    try {
+      await updateDoc(doc(db, 'trip_categories', id), { name: trimmed });
+      setEditingTripCategoryId(null);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleDeleteTripCategory = async (id: string, name: string) => {
     if (!confirm(`旅行カテゴリー「${name}」を削除しますか？`)) return;
-    await supabase.from('trip_categories').delete().eq('id', id);
-    fetchData();
+    try {
+      await deleteDoc(doc(db, 'trip_categories', id));
+      fetchData();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleAddExchangeRate = () => {
@@ -280,7 +328,7 @@ export default function App() {
     <div className="min-h-screen bg-stone-100 flex justify-center items-start pt-4 px-4 font-sans text-stone-700">
       <div className="w-full max-w-md bg-stone-50 rounded-3xl shadow-xl border border-stone-200/60 flex flex-col min-h-[720px] overflow-hidden mb-8">
         
-        {/* === モード切替ヘッダー（淡いナチュラルカラー） === */}
+        {/* === モード切替ヘッダー === */}
         <div className="bg-stone-200/80 text-stone-600 px-4 py-3 flex justify-between items-center text-xs font-bold border-b border-stone-300/50">
           <span className="text-stone-500">表示モード:</span>
           <div className="flex bg-stone-300/60 p-1 rounded-xl gap-1">
@@ -361,11 +409,10 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* モード B: 旅のお会計（やわらかいウォームローズ調）          */}
+        {/* モード B: 旅のお会計                                    */}
         {/* ========================================================= */}
         {appMode === 'trip' && (
           <div className="flex-1 flex flex-col bg-stone-50">
-            {/* ヘッダー＆旅行選択 */}
             <div className="bg-rose-50/70 text-stone-700 p-5 pb-6 border-b border-rose-100 space-y-3">
               <div>
                 <h1 className="text-xl font-black tracking-wide text-rose-900">旅のお会計</h1>
@@ -397,7 +444,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* 4タブナビゲーション */}
             <nav className="flex justify-around text-xs font-bold border-b border-stone-200/60 bg-white shadow-xs">
               <button type="button" onClick={() => setActiveTabTrip('input')} className={`w-full py-3 flex flex-col items-center gap-1 transition ${activeTabTrip === 'input' ? 'text-rose-600 bg-rose-50/40 border-b-2 border-rose-500' : 'text-stone-400'}`}><PlusCircle size={15} />入力</button>
               <button type="button" onClick={() => setActiveTabTrip('summary')} className={`w-full py-3 flex flex-col items-center gap-1 transition ${activeTabTrip === 'summary' ? 'text-rose-600 bg-rose-50/40 border-b-2 border-rose-500' : 'text-stone-400'}`}><BarChart3 size={15} />集計</button>
@@ -405,10 +451,8 @@ export default function App() {
               <button type="button" onClick={() => setActiveTabTrip('settings')} className={`w-full py-3 flex flex-col items-center gap-1 transition ${activeTabTrip === 'settings' ? 'text-rose-600 bg-rose-50/40 border-b-2 border-rose-500' : 'text-stone-400'}`}><Settings size={15} />設定</button>
             </nav>
 
-            {/* タブコンテンツ */}
             <div className="flex-1 p-5 overflow-y-auto">
               
-              {/* 【1】入力画面 */}
               {activeTabTrip === 'input' && (
                 <form onSubmit={handleSaveTripExpense} className="space-y-4 bg-white p-5 rounded-2xl shadow-xs border border-stone-200/60">
                   <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider">旅行の支出を記録</h3>
@@ -460,10 +504,8 @@ export default function App() {
                 </form>
               )}
 
-              {/* 【2】集計画面 */}
               {activeTabTrip === 'summary' && (
                 <div className="space-y-4">
-                  {/* 日本円一括精算カード（淡いベージュグラデーション） */}
                   <div className="bg-gradient-to-br from-amber-500/10 via-rose-500/10 to-stone-200/50 rounded-2xl p-5 border border-rose-200/60 shadow-xs space-y-3">
                     <div className="text-center space-y-1 border-b border-rose-200/60 pb-4">
                       <p className="text-xxs font-bold text-stone-400 uppercase tracking-wider">旅の総支出 (日本円換算合計)</p>
@@ -511,7 +553,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* 【3】明細画面 */}
               {activeTabTrip === 'list' && (
                 <div className="space-y-3">
                   <h3 className="text-xs font-bold text-stone-400 tracking-wider uppercase mb-1">旅の明細一覧 ({tripExpenses.length}件)</h3>
@@ -537,10 +578,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* 【4】設定画面 */}
               {activeTabTrip === 'settings' && (
                 <div className="space-y-5">
-                  {/* 旅行専用カテゴリー設定 */}
                   <div className="bg-white border border-stone-200/60 rounded-2xl p-4 space-y-3 shadow-xs">
                     <h4 className="text-sm font-bold text-stone-600">旅行専用カテゴリー設定</h4>
                     <div className="flex gap-2">
@@ -566,20 +605,8 @@ export default function App() {
                             <>
                               <span className="text-stone-700 font-medium">{c.name}</span>
                               <div className="flex items-center gap-1">
-                                <button 
-                                  type="button" 
-                                  onClick={() => { setEditingTripCategoryId(c.id); setEditingTripCategoryName(c.name); }} 
-                                  className="text-stone-400 hover:text-sky-600 p-1"
-                                >
-                                  <Edit2 size={13} />
-                                </button>
-                                <button 
-                                  type="button" 
-                                  onClick={() => handleDeleteTripCategory(c.id, c.name)} 
-                                  className="text-stone-300 hover:text-rose-500 p-1"
-                                >
-                                  <Trash2 size={13} />
-                                </button>
+                                <button type="button" onClick={() => { setEditingTripCategoryId(c.id); setEditingTripCategoryName(c.name); }} className="text-stone-400 hover:text-sky-600 p-1"><Edit2 size={13} /></button>
+                                <button type="button" onClick={() => handleDeleteTripCategory(c.id, c.name)} className="text-stone-300 hover:text-rose-500 p-1"><Trash2 size={13} /></button>
                               </div>
                             </>
                           )}
@@ -588,7 +615,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 通貨・為替レート設定 */}
                   <div className="bg-white border border-stone-200/60 rounded-2xl p-4 space-y-3 shadow-xs">
                     <h4 className="text-sm font-bold text-stone-600">利用する通貨と為替レート設定</h4>
                     <p className="text-xxs text-stone-400">1通貨あたり何円（JPY）になるかを入力してください。</p>
@@ -623,20 +649,8 @@ export default function App() {
                               <span className="text-stone-500 font-medium mr-1">1 {code} = {rate} JPY</span>
                               {code !== 'JPY' && (
                                 <>
-                                  <button 
-                                    type="button" 
-                                    onClick={() => { setEditingCurrencyCode(code); setEditingRateValue(String(rate)); }} 
-                                    className="text-stone-400 hover:text-sky-600 p-1"
-                                  >
-                                    <Edit2 size={13} />
-                                  </button>
-                                  <button 
-                                    type="button" 
-                                    onClick={() => handleDeleteExchangeRate(code)} 
-                                    className="text-stone-300 hover:text-rose-500 p-1"
-                                  >
-                                    <Trash2 size={13} />
-                                  </button>
+                                  <button type="button" onClick={() => { setEditingCurrencyCode(code); setEditingRateValue(String(rate)); }} className="text-stone-400 hover:text-sky-600 p-1"><Edit2 size={13} /></button>
+                                  <button type="button" onClick={() => handleDeleteExchangeRate(code)} className="text-stone-300 hover:text-rose-500 p-1"><Trash2 size={13} /></button>
                                 </>
                               )}
                             </div>
