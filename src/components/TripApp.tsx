@@ -8,7 +8,6 @@ import {
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
-// --- このファイル内で型を直接定義してエクスポートのすれ違いを防ぐ ---
 export interface Trip {
   id: string;
   title: string;
@@ -49,6 +48,7 @@ export default function TripApp() {
   const [tripCurrency, setTripCurrency] = useState('JPY');
   const [tripPayer, setTripPayer] = useState<'AO' | 'MASA' | null>(null);
   const [tripMemo, setTripMemo] = useState('');
+  const [editingTripExpenseId, setEditingTripExpenseId] = useState<string | null>(null);
   
   // 新規旅行作成用
   const [showNewTripForm, setShowNewTripForm] = useState(false);
@@ -75,6 +75,12 @@ export default function TripApp() {
       const ratioDoc = await getDoc(doc(db, 'ratios', 'current'));
       if (ratioDoc.exists()) {
         setRatioAO(ratioDoc.data().ratio_ao ?? 50);
+      }
+
+      // 為替レートの取得
+      const ratesDoc = await getDoc(doc(db, 'exchange_rates', 'current'));
+      if (ratesDoc.exists()) {
+        setExchangeRates(ratesDoc.data().rates || { JPY: 1, USD: 150, EUR: 160, KRW: 0.11, TWD: 4.8 });
       }
 
       const tripSnap = await getDocs(query(collection(db, 'trips'), orderBy('start_date', 'desc')));
@@ -117,6 +123,14 @@ export default function TripApp() {
   useEffect(() => { fetchTripData(); }, []);
   useEffect(() => { if (selectedTripId) fetchTripExpenses(selectedTripId); }, [selectedTripId]);
 
+  const saveRatesToFirestore = async (newRates: Record<string, number>) => {
+    try {
+      await setDoc(doc(db, 'exchange_rates', 'current'), { rates: newRates });
+    } catch (err) {
+      console.error('為替レートの保存に失敗しました:', err);
+    }
+  };
+
   const handleAddTrip = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTripTitle.trim()) {
@@ -140,7 +154,6 @@ export default function TripApp() {
   const handleSaveTripExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTripId || !tripAmount || Number(tripAmount) <= 0 || !tripPayer || !tripCategory) return;
-    const newId = Date.now().toString();
     const expenseData = {
       trip_id: selectedTripId,
       date: tripDate,
@@ -151,7 +164,13 @@ export default function TripApp() {
       memo: tripMemo
     };
     try {
-      await setDoc(doc(db, 'trip_expenses', newId), expenseData);
+      if (editingTripExpenseId) {
+        await updateDoc(doc(db, 'trip_expenses', editingTripExpenseId), expenseData);
+        setEditingTripExpenseId(null);
+      } else {
+        const newId = Date.now().toString();
+        await setDoc(doc(db, 'trip_expenses', newId), expenseData);
+      }
       setTripAmount(''); setTripMemo('');
       fetchTripExpenses(selectedTripId);
       setActiveTabTrip('summary');
@@ -160,13 +179,24 @@ export default function TripApp() {
     }
   };
 
+  const handleEditTripExpense = (item: TripExpense) => {
+    setEditingTripExpenseId(item.id);
+    setTripDate(item.date);
+    setTripCategory(item.category);
+    setTripAmount(String(item.amount));
+    setTripCurrency(item.currency);
+    setTripPayer(item.payer);
+    setTripMemo(item.memo || '');
+    setActiveTabTrip('input');
+  };
+
   const handleDeleteTripExpense = async (id: string) => {
     if (confirm('この旅の明細を削除しますか？')) {
       try {
         await deleteDoc(doc(db, 'trip_expenses', id));
         fetchTripExpenses(selectedTripId);
       } catch (err) {
-        console.error(err);
+        console.error('削除エラー:', err);
       }
     }
   };
@@ -218,7 +248,9 @@ export default function TripApp() {
       alert('有効な通貨コードとレートを入力してください');
       return;
     }
-    setExchangeRates(prev => ({ ...prev, [code]: rate }));
+    const updated = { ...exchangeRates, [code]: rate };
+    setExchangeRates(updated);
+    saveRatesToFirestore(updated);
     setNewCurrencyCode(''); setNewCurrencyRate('');
   };
 
@@ -228,7 +260,9 @@ export default function TripApp() {
       alert('有効なレートを入力してください');
       return;
     }
-    setExchangeRates(prev => ({ ...prev, [code]: rate }));
+    const updated = { ...exchangeRates, [code]: rate };
+    setExchangeRates(updated);
+    saveRatesToFirestore(updated);
     setEditingCurrencyCode(null);
   };
 
@@ -238,11 +272,10 @@ export default function TripApp() {
       return;
     }
     if (confirm(`通貨「${code}」を削除しますか？`)) {
-      setExchangeRates(prev => {
-        const copy = { ...prev };
-        delete copy[code];
-        return copy;
-      });
+      const updated = { ...exchangeRates };
+      delete updated[code];
+      setExchangeRates(updated);
+      saveRatesToFirestore(updated);
       if (tripCurrency === code) setTripCurrency('JPY');
     }
   };
@@ -331,7 +364,12 @@ export default function TripApp() {
       <div className="flex-1 p-5 overflow-y-auto">
         {activeTabTrip === 'input' && (
           <form onSubmit={handleSaveTripExpense} className="space-y-4 bg-white p-5 rounded-2xl shadow-xs border border-stone-200/60">
-            <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider">旅行の支出を記録</h3>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-xs font-bold text-rose-700 uppercase tracking-wider">{editingTripExpenseId ? '旅の明細を編集中' : '旅行の支出を記録'}</span>
+              {editingTripExpenseId && (
+                <button type="button" onClick={() => { setEditingTripExpenseId(null); setTripAmount(''); setTripMemo(''); }} className="text-xxs text-stone-400 underline">キャンセル</button>
+              )}
+            </div>
             
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -373,7 +411,7 @@ export default function TripApp() {
             </div>
 
             <button type="submit" disabled={!selectedTripId || !tripAmount || !tripPayer || !tripCategory} className="w-full py-3.5 bg-rose-500 hover:bg-rose-600 disabled:bg-stone-200 text-white font-bold rounded-xl text-sm shadow-xs transition">
-              追加して集計を見る
+              {editingTripExpenseId ? '変更を保存する' : '追加して集計を見る'}
             </button>
           </form>
         )}
@@ -440,6 +478,7 @@ export default function TripApp() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="font-bold text-stone-800 text-sm">{item.currency} {item.amount.toLocaleString()}</span>
+                    <button type="button" onClick={() => handleEditTripExpense(item)} className="text-stone-400 hover:text-sky-600 p-1"><Edit2 size={13} /></button>
                     <button type="button" onClick={() => handleDeleteTripExpense(item.id)} className="text-stone-300 hover:text-rose-500 p-1"><Trash2 size={14} /></button>
                   </div>
                 </div>
@@ -512,7 +551,7 @@ export default function TripApp() {
                         {code !== 'JPY' && (
                           <>
                             <button type="button" onClick={() => { setEditingCurrencyCode(code); setEditingRateValue(String(rate)); }} className="text-stone-400 hover:text-sky-600 p-1"><Edit2 size={13} /></button>
-                            <button type="button" onClick={() => handleDeleteExchangeRate(code)} className="text-stone-300 hover:text-rose-500 p-1"><Trash2 size={14} /></button>
+                            <button type="button" onClick={() => handleDeleteExchangeRate(code)} className="text-stone-300 hover:text-rose-500 p-1"><Trash2 size={13} /></button>
                           </>
                         )}
                       </div>

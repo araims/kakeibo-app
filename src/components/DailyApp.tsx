@@ -85,8 +85,29 @@ export default function DailyApp() {
         await setDoc(doc(db, 'expenses', newId), expenseData);
       }
       setAmount(''); setMemo(''); fetchDailyData();
+      setActiveTabDaily('list');
     } catch (err) {
       console.error('保存エラー:', err);
+    }
+  };
+
+  const handleEditExpense = (item: Expense) => {
+    setEditingId(item.id);
+    setDate(item.date);
+    setCategory(item.category);
+    setAmount(String(item.amount));
+    setPayer(item.payer);
+    setMemo(item.memo || '');
+    setActiveTabDaily('input');
+  };
+
+  const handleDeleteExpense = async (id: string) => {
+    if (!confirm('この明細を削除しますか？')) return;
+    try {
+      await deleteDoc(doc(db, 'expenses', id));
+      fetchDailyData();
+    } catch (err) {
+      console.error('削除エラー:', err);
     }
   };
 
@@ -198,6 +219,12 @@ export default function DailyApp() {
       <div className="flex-1 p-5 bg-stone-50 overflow-y-auto">
         {activeTabDaily === 'input' && (
           <form onSubmit={handleSaveDaily} className="space-y-3 text-xs bg-white p-5 rounded-2xl border border-stone-200/60 shadow-xs">
+            <div className="flex justify-between items-center mb-1">
+              <span className="font-bold text-sky-700">{editingId ? '明細を編集中' : '新規支出の追加'}</span>
+              {editingId && (
+                <button type="button" onClick={() => { setEditingId(null); setAmount(''); setMemo(''); }} className="text-xxs text-stone-400 underline">キャンセル</button>
+              )}
+            </div>
             <div><label className="font-bold text-stone-400 block mb-1">日付</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-200 bg-stone-50" /></div>
             <div>
               <label className="font-bold text-stone-400 block mb-1">カテゴリー</label>
@@ -208,7 +235,7 @@ export default function DailyApp() {
             <div><label className="font-bold text-stone-400 block mb-1">金額</label><input type="text" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ''))} className="w-full p-2.5 text-right font-bold rounded-xl border border-stone-200 bg-stone-50" /></div>
             <div><label className="font-bold text-stone-400 block mb-1">支払った人</label><div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => setPayer('AO')} className={`py-2 rounded-xl font-bold border ${payer === 'AO' ? 'bg-rose-50 border-rose-300 text-rose-700' : 'bg-stone-50 text-stone-400 border-stone-200'}`}>AO</button><button type="button" onClick={() => setPayer('MASA')} className={`py-2 rounded-xl font-bold border ${payer === 'MASA' ? 'bg-sky-50 border-sky-300 text-sky-700' : 'bg-stone-50 text-stone-400 border-stone-200'}`}>MASA</button></div></div>
             <div><label className="font-bold text-stone-400 block mb-1">メモ</label><input type="text" placeholder="任意" value={memo} onChange={(e) => setMemo(e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-200 bg-stone-50" /></div>
-            <button type="submit" disabled={!amount || !payer || !category} className="w-full py-3 bg-sky-600 hover:bg-sky-700 disabled:bg-stone-200 text-white font-bold rounded-xl shadow-xs transition">追加する</button>
+            <button type="submit" disabled={!amount || !payer || !category} className="w-full py-3 bg-sky-600 hover:bg-sky-700 disabled:bg-stone-200 text-white font-bold rounded-xl shadow-xs transition">{editingId ? '変更を保存する' : '追加する'}</button>
           </form>
         )}
 
@@ -263,7 +290,11 @@ export default function DailyApp() {
                     </div>
                     <p className="text-xxs text-stone-400 mt-0.5">{i.date} {i.memo && `• ${i.memo}`}</p>
                   </div>
-                  <span className="font-bold text-stone-800">JPY {i.amount.toLocaleString()}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-stone-800">JPY {i.amount.toLocaleString()}</span>
+                    <button type="button" onClick={() => handleEditExpense(i)} className="text-stone-400 hover:text-sky-600 p-1"><Edit2 size={13} /></button>
+                    <button type="button" onClick={() => handleDeleteExpense(i.id)} className="text-stone-300 hover:text-rose-500 p-1"><Trash2 size={13} /></button>
+                  </div>
                 </div>
               ))
             )}
@@ -313,12 +344,7 @@ export default function DailyApp() {
                     <div key={c.id} className="flex justify-between items-center p-2.5 bg-stone-50 rounded-xl border border-stone-200/60">
                       {editingDailyCategoryId === c.id ? (
                         <div className="flex items-center gap-2 w-full">
-                          <input 
-                            type="text" 
-                            value={editingDailyCategoryName} 
-                            onChange={(e) => setEditingDailyCategoryName(e.target.value)} 
-                            className="flex-1 p-1.5 bg-white border border-stone-300 rounded-lg" 
-                          />
+                          <input type="text" value={editingDailyCategoryName} onChange={(e) => setEditingDailyCategoryName(e.target.value)} className="flex-1 p-1.5 bg-white border border-stone-300 rounded-lg" />
                           <button type="button" onClick={() => handleUpdateDailyCategory(c.id)} className="p-1.5 bg-emerald-600 text-white rounded-lg"><Check size={14} /></button>
                           <button type="button" onClick={() => { setEditingDailyCategoryId(null); setEditingDailyCategoryName(''); }} className="p-1.5 bg-stone-200 text-stone-600 rounded-lg"><X size={14} /></button>
                         </div>
@@ -326,16 +352,7 @@ export default function DailyApp() {
                         <>
                           <span className="text-stone-700 font-medium">{c.name}</span>
                           <div className="flex items-center gap-1">
-                            <button 
-                              type="button" 
-                              onClick={() => { 
-                                setEditingDailyCategoryId(c.id); 
-                                setEditingDailyCategoryName(c.name); 
-                              }} 
-                              className="text-stone-400 hover:text-sky-600 p-1"
-                            >
-                              <Edit2 size={13} />
-                            </button>
+                            <button type="button" onClick={() => { setEditingDailyCategoryId(c.id); setEditingDailyCategoryName(c.name); }} className="text-stone-400 hover:text-sky-600 p-1"><Edit2 size={13} /></button>
                             <button type="button" onClick={() => handleDeleteDailyCategory(c.id, c.name)} className="text-stone-300 hover:text-rose-500 p-1"><Trash2 size={13} /></button>
                           </div>
                         </>
